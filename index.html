@@ -817,21 +817,16 @@ async function runSearch() {
   showLoading(true);
 
   try {
-    // Step 1: Find the category folder in Drive
+    // Step 1: Navigate to AAA DESIGNS → Category → Collection subfolder
     updateLoadingText('Finding folder in Google Drive…');
-    const config = getConfig();
-    const folderId = await findFolder(category, config.parentFolder);
-
-    if (!folderId) {
-      throw new Error(`Could not find folder "${category}" in your Drive. Please check the folder name in Settings.`);
-    }
+    const folderId = await findCollectionFolder(category, collection);
 
     // Step 2: List images in that folder
-    updateLoadingText(`Loading images from ${category} folder…`);
+    updateLoadingText(`Loading images from folder…`);
     const files = await listFilesInFolder(folderId, collection);
 
     if (files.length === 0) {
-      throw new Error(`No images found in "${category}" for collection prefix "${collection}". Check your Drive folder.`);
+      throw new Error(`No images found in this folder. Please check your Drive structure.`);
     }
 
     updateLoadingText(`Comparing ${files.length} items with AI…`);
@@ -850,22 +845,40 @@ async function runSearch() {
 }
 
 // ─── Google Drive API ──────────────────────────────────────────────────────────
-async function findFolder(folderName, parentFolderName) {
-  let query = `mimeType='application/vnd.google-apps.folder' and name='${folderName}' and trashed=false`;
-  if (parentFolderName) {
-    // First find the parent
-    const parentRes = await driveRequest(`files?q=${encodeURIComponent(`mimeType='application/vnd.google-apps.folder' and name='${parentFolderName}' and trashed=false`)}&fields=files(id,name)&pageSize=5`);
-    if (parentRes.files && parentRes.files.length > 0) {
-      const parentId = parentRes.files[0].id;
-      query += ` and '${parentId}' in parents`;
-    }
-  }
-  const res = await driveRequest(`files?q=${encodeURIComponent(query)}&fields=files(id,name)&pageSize=5`);
+
+// Collection prefix → subfolder name mapping
+const COLLECTION_FOLDERS = {
+  'TR': 'Trinity',
+  'DZ': 'CZ',
+  'SK': 'Sukshm'
+};
+
+async function findFolderByName(name, parentId) {
+  let query = `mimeType='application/vnd.google-apps.folder' and name='${name}' and trashed=false`;
+  if (parentId) query += ` and '${parentId}' in parents`;
+  const res = await driveRequest(`files?q=${encodeURIComponent(query)}&fields=files(id,name)&pageSize=10`);
   return res.files && res.files.length > 0 ? res.files[0].id : null;
 }
 
+async function findCollectionFolder(category, collection) {
+  // Step 1: Find parent folder "AAA DESIGNS"
+  const parentId = await findFolderByName('AAA DESIGNS', null);
+  if (!parentId) throw new Error('Could not find "AAA DESIGNS" folder in your Google Drive. Make sure you are signed in with the correct account.');
+
+  // Step 2: Find category folder inside parent e.g. "LADIES RINGS"
+  const categoryId = await findFolderByName(category, parentId);
+  if (!categoryId) throw new Error(`Could not find folder "${category}" inside AAA DESIGNS.`);
+
+  // Step 3: Find collection subfolder inside category e.g. "Trinity"
+  const collectionFolderName = COLLECTION_FOLDERS[collection];
+  const collectionId = await findFolderByName(collectionFolderName, categoryId);
+  if (!collectionId) throw new Error(`Could not find "${collectionFolderName}" subfolder inside ${category}.`);
+
+  return collectionId;
+}
+
 async function listFilesInFolder(folderId, collectionPrefix) {
-  const query = `'${folderId}' in parents and mimeType contains 'image/' and trashed=false and name contains '${collectionPrefix}'`;
+  const query = `'${folderId}' in parents and mimeType contains 'image/' and trashed=false`;
   const res = await driveRequest(`files?q=${encodeURIComponent(query)}&fields=files(id,name,thumbnailLink,webContentLink)&pageSize=${MAX_RESULTS}&orderBy=name`);
   return res.files || [];
 }
